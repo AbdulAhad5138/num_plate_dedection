@@ -30,7 +30,7 @@ reader = load_reader()
 # ----------------------------
 # Sidebar
 # ----------------------------
-st.sidebar.image("assets/logo.png", use_container_width=True)  # ✅ Logo added back
+st.sidebar.image("logo.png", use_container_width=True)  # ✅ Logo added back
 st.sidebar.title("⚙️ Settings")
 conf = st.sidebar.slider("Confidence Threshold", 0.1, 1.0, 0.5, 0.05)
 
@@ -81,3 +81,4 @@ if uploaded_file:
             st.warning("⚠️ No license plate detected.")
 else:
     st.info("👆 Please upload an image to start.")
+
