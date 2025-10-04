@@ -1,0 +1,24 @@
+/* Make logo bigger and remove any border/shadow */
+img {
+    border: none !important;
+    box-shadow: none !important;
+}
+
+/* Header styling */
+.header-title h1 {
+    color: #004aad;
+    font-size: 36px;
+    margin-bottom: 5px;
+}
+
+.header-title p {
+    color: #555;
+    font-size: 16px;
+}
+
+/* Results tab styling */
+.stSuccess {
+    background-color: #e6f7ff !important;
+    border-left: 6px solid #004aad !important;
+    font-size: 18px;
+}
