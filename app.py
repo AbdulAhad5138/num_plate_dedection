@@ -9,15 +9,6 @@ import re
 import pandas as pd
 from collections import Counter
 from difflib import SequenceMatcher
-import os
-
-logo_path = os.path.join("assets", "logo.png")
-if os.path.exists(logo_path):
-    st.image(logo_path, width=200, use_container_width=False)
-else:
-    st.warning("⚠️ Logo not found. Please check assets/logo.png")
-
-# ----------------------------
 # App Config
 # ----------------------------
 st.set_page_config(
@@ -227,4 +218,5 @@ if st.session_state.plate_list:
             file_name="detected_plates.csv",
             mime="text/csv",
         )
+
 
