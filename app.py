@@ -9,6 +9,9 @@ import re
 import pandas as pd
 from collections import Counter
 from difflib import SequenceMatcher
+
+
+# ----------------------------
 # App Config
 # ----------------------------
 st.set_page_config(
@@ -18,16 +21,30 @@ st.set_page_config(
 )
 
 # ----------------------------
+# Apply Custom CSS
+# ----------------------------
+def local_css(file_name):
+    try:
+        with open(file_name) as f:
+            st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+    except FileNotFoundError:
+        pass
+
+local_css("assets/style.css")
+
+# ----------------------------
 # Helpers
 # ----------------------------
 def clean_text(text):
     """Keep only A-Z and 0-9"""
-    return re.sub(r'[^A-Z0-9]', '', text.upper())
+    return re.sub(r'[^A-Z0-9]', '', text.upper()) if text else ""
 
 def preprocess_crop(crop):
     """Improve OCR accuracy by resizing + grayscale + threshold"""
     if crop is None or crop.size == 0:
         return crop
+    if isinstance(crop, Image.Image):
+        crop = np.array(crop)[:, :, ::-1]
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
     gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
     _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -37,25 +54,22 @@ def similar(a, b):
     """Check similarity ratio between two strings"""
     return SequenceMatcher(None, a, b).ratio()
 
-def finalize_plates(plates):
+def finalize_plates(plates, min_count=2):
     """Remove duplicates & noisy OCR results"""
-    cleaned = [clean_text(p) for p in plates if len(clean_text(p)) >= 4]
+    cleaned = [clean_text(p) for p in plates if p and len(clean_text(p)) >= 4]
     counts = Counter(cleaned)
     final = []
 
     for plate, count in counts.items():
-        if count < 2:  # must appear in at least 2 frames
+        if count < min_count:
             continue
-
         is_duplicate = False
         for f in final:
-            if similar(plate, f) > 0.8:  # 80% similarity = duplicate
+            if similar(plate, f) > 0.8:
                 is_duplicate = True
                 break
-
         if not is_duplicate:
             final.append(plate)
-
     return final
 
 # ----------------------------
@@ -63,7 +77,7 @@ def finalize_plates(plates):
 # ----------------------------
 @st.cache_resource
 def load_model():
-    return YOLO("best.pt")
+    return YOLO("best02.pt")
 
 model = load_model()
 
@@ -74,21 +88,29 @@ def load_reader():
 reader = load_reader()
 
 # ----------------------------
-# Sidebar Settings
+# Sidebar
 # ----------------------------
 st.sidebar.title("⚙️ Settings")
 conf = st.sidebar.slider("Confidence Threshold", 0.1, 1.0, 0.5, 0.05)
 
-# Store detected plates in session
+# ----------------------------
+# Session State
+# ----------------------------
 if "plate_list" not in st.session_state:
     st.session_state.plate_list = []
 
+if "input_type" not in st.session_state:
+    st.session_state.input_type = "Image"
+
 # ----------------------------
-# Header (Logo + Title)
+# Header
 # ----------------------------
 col1, col2 = st.columns([1, 3])
 with col1:
-    st.image("assets/logo.png", width=200, use_container_width=False)  # Bigger logo, no border
+    try:
+        st.image("assets/logo.png", width=220, output_format="PNG", caption="", use_container_width=False)
+    except Exception:
+        pass
 with col2:
     st.markdown("""
         <div class="header-title">
@@ -97,15 +119,17 @@ with col2:
         </div>
     """, unsafe_allow_html=True)
 
-st.markdown("---")
-
 # ----------------------------
 # Tabs
 # ----------------------------
-tab1, = st.tabs(["📤 Upload"])  # Only Upload tab visible at start
+tab1, tab2 = st.tabs(["📤 Upload", "📊 Results"])
 
+# ----------------------------
+# Upload Tab
+# ----------------------------
 with tab1:
     file_type = st.radio("Choose input type", ["Image", "Video"])
+    st.session_state.input_type = file_type
 
     # ----------------------------
     # Image Upload
@@ -125,16 +149,20 @@ with tab1:
                 im_rgb = Image.fromarray(im_array[..., ::-1])
                 st.image(im_rgb, caption="Detected Plates", use_container_width=True)
 
-                if r.boxes:
+                if getattr(r, "boxes", None):
                     st.subheader("📋 Detection Details")
                     for i, box in enumerate(r.boxes):
                         cls = model.names[int(box.cls)]
                         conf_score = float(box.conf)
-                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
+                        try:
+                            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
+                        except Exception:
+                            coords = box.xyxy.cpu().numpy().astype(int)[0]
+                            x1, y1, x2, y2 = coords
                         crop = np.array(image)[y1:y2, x1:x2]
-                        crop = preprocess_crop(crop)
+                        crop_pre = preprocess_crop(crop)
 
-                        ocr_result = reader.readtext(crop)
+                        ocr_result = reader.readtext(crop_pre) if crop_pre is not None else []
                         if ocr_result:
                             plate_number = clean_text(ocr_result[0][1])
                         else:
@@ -143,7 +171,7 @@ with tab1:
                         st.write(f"🔲 **{cls}** — Confidence: {conf_score:.2f}")
                         if plate_number:
                             st.write(f"📖 **Plate Number:** {plate_number}")
-                            st.image(crop, caption=f"Cropped Plate {i+1}", use_container_width=False)
+                            st.image(crop_pre, caption=f"Cropped Plate {i+1}", use_container_width=False)
                             st.session_state.plate_list.append(plate_number)
                         else:
                             st.warning("⚠️ No readable plate text detected.")
@@ -162,6 +190,9 @@ with tab1:
             stframe = st.empty()
 
             frame_idx = 0
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            st.info(f"🎞️ Total frames in video: {total_frames}")
+
             with st.spinner("🎥 Processing video..."):
                 while cap.isOpened():
                     ret, frame = cap.read()
@@ -169,47 +200,59 @@ with tab1:
                         break
 
                     frame_idx += 1
-                    if frame_idx % 20 != 0:  # process every 20th frame
+                    # Process every 5th frame for good coverage
+                    if frame_idx % 5 != 0:
                         continue
 
-                    results = model.predict(frame, conf=conf)
+                    results = model.predict(frame, conf=conf, verbose=False)
 
                     for r in results:
                         im_array = r.plot(show=False)
                         im_rgb = cv2.cvtColor(im_array, cv2.COLOR_BGR2RGB)
                         stframe.image(im_rgb, caption=f"Frame {frame_idx}", use_container_width=True)
 
-                        if r.boxes:
+                        if getattr(r, "boxes", None) and len(r.boxes) > 0:
                             for box in r.boxes:
-                                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
+                                try:
+                                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
+                                except Exception:
+                                    coords = box.xyxy.cpu().numpy().astype(int)[0]
+                                    x1, y1, x2, y2 = coords
+
                                 crop = frame[y1:y2, x1:x2]
-                                crop = preprocess_crop(crop)
+                                crop_pre = preprocess_crop(crop)
 
-                                ocr_result = reader.readtext(crop)
+                                ocr_result = reader.readtext(crop_pre) if crop_pre is not None else []
                                 if ocr_result:
-                                    plate_number = clean_text(ocr_result[0][1])
-                                    st.session_state.plate_list.append(plate_number)
+                                    for det in ocr_result:
+                                        plate_number = clean_text(det[1])
+                                        if plate_number and len(plate_number) >= 4:
+                                            st.session_state.plate_list.append(plate_number)
 
-            cap.release()
+                cap.release()
+                st.success("✅ Video processing completed!")
 
 # ----------------------------
-# Results Section
+# Results Tab
 # ----------------------------
-if st.session_state.plate_list:
-    # Show Results tab only if plates exist
-    tab2, = st.tabs(["📊 Results"])   # <-- fixed unpacking
+with tab2:
+    st.subheader("✅ Final Detected Plate Numbers")
 
-    with tab2:
-        st.subheader("✅ Final Detected Plate Numbers")
-        final_plates = finalize_plates(st.session_state.plate_list)
+    input_type = st.session_state.get("input_type", "Image")
+    min_count = 1 if input_type == "Image" else 2
 
-        if final_plates:
-            for i, plate in enumerate(final_plates, 1):
-                st.success(f"🚘 Plate {i}: {plate}")
+    final_plates = finalize_plates(st.session_state.plate_list, min_count=min_count)
+
+    if final_plates:
+        for i, plate in enumerate(final_plates, 1):
+            st.success(f"🚘 Plate {i}: {plate}")
+    else:
+        if st.session_state.plate_list:
+            st.warning("⚠️ No valid plate numbers detected after filtering.")
         else:
-            st.warning("⚠️ No valid plate numbers detected.")
+            st.info("No plates detected yet. Upload an image or video to start detection.")
 
-        # Save to CSV
+    if final_plates:
         df = pd.DataFrame(final_plates, columns=["Detected Plates"])
         csv = df.to_csv(index=False).encode("utf-8")
         st.download_button(
@@ -218,5 +261,3 @@ if st.session_state.plate_list:
             file_name="detected_plates.csv",
             mime="text/csv",
         )
-
-
